@@ -77,7 +77,6 @@ func (c *Client) exec(cmd string, args ...string) ([]byte, error) {
 		flags = append([]string{cmd}, flags...)
 		cmd = "sudo"
 	}
-
 	c.debugf("exec: %s %v", cmd, flags)
 
 	// Execute execFunc with all flags and clean up any whitespace or

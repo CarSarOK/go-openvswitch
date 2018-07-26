@@ -146,20 +146,23 @@ func (f *Flow) MarshalText() ([]byte, error) {
 
 	b = strconv.AppendInt(b, int64(f.Priority), 10)
 
+	b = append(b, []byte(",protocol=")...)
 	if f.Protocol != "" {
-		b = append(b, ',')
 		b = append(b, f.Protocol...)
+	} else {
+		b = append(b, []byte("null")...)
 	}
 
+	b = append(b, ","+inPort+"="...)
 	if f.InPort != 0 {
-		b = append(b, ","+inPort+"="...)
-
 		// Special case, InPortLOCAL is converted to the literal string LOCAL
 		if f.InPort == PortLOCAL {
 			b = append(b, portLOCAL...)
 		} else {
 			b = strconv.AppendInt(b, int64(f.InPort), 10)
 		}
+	} else {
+		b = append(b, []byte("null")...)
 	}
 
 	if len(matches) > 0 {
@@ -172,11 +175,9 @@ func (f *Flow) MarshalText() ([]byte, error) {
 	b = append(b, ","+idleTimeout+"="...)
 	b = strconv.AppendInt(b, int64(f.IdleTimeout), 10)
 
-	if f.Cookie > 0 {
-		// Hexadecimal cookies are much easier to read.
-		b = append(b, ","+cookie+"="...)
-		b = append(b, paddedHexUint64(f.Cookie)...)
-	}
+	// Hexadecimal cookies are much easier to read.
+	b = append(b, ","+cookie+"="...)
+	b = append(b, paddedHexUint64(f.Cookie)...)
 
 	b = append(b, ","+keyActions+"="+strings.Join(actions, ",")...)
 

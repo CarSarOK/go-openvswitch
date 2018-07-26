@@ -17,6 +17,7 @@ package ovs
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -100,6 +101,213 @@ func (v *VSwitchService) ListBridges() ([]string, error) {
 
 	bridges := strings.Split(strings.TrimSpace(string(output)), "\n")
 	return bridges, nil
+}
+
+// AT&T Custom Functions
+// Modify existing Port vlan/trunk
+func (v *VSwitchService) ModPortVlan(portId string, vlan int) error {
+	if vlan == -1 {
+		_, err := v.exec("clear", "port", portId, "tag")
+		return err
+	} else {
+		var tagString string
+		tagString = "tag=" + strconv.Itoa(vlan)
+		_, err := v.exec("set", "port", portId, tagString)
+		return err
+	}
+}
+
+func (v *VSwitchService) ModPortTrunks(portId string, trunks string) error {
+	if trunks == "[-1]" {
+		_, err := v.exec("clear", "port", portId, "trunks")
+		return err
+	} else {
+		var trunksString = "trunks=" + trunks
+		_, err := v.exec("set", "port", portId, trunksString)
+		return err
+	}
+}
+
+// Create Mirror
+func (v *VSwitchService) CreateMirror(bridgeId string, mirrorString string) error {
+	output, _ := v.exec("get", "bridge", bridgeId, "mirror")
+	mirrorID := strings.Trim(string(output), "[]")
+	mrids := ""
+	if mirrorID != "" {
+		mrids = mrids + mirrorID + ","
+	}
+
+	args := []string{"--", "set", "Bridge", bridgeId, "mirrors=" + mrids + "@m", "--", "--id=@m"}
+	args = append(args, strings.Split(mirrorString, " ")...)
+	_, err := v.exec(args...)
+
+	return err
+}
+
+// Delete Mirror
+func (v *VSwitchService) DeleteMirror(bridgeId string, mirrorId string) error {
+	_, err := v.exec("remove", "Bridge", bridgeId, "mirrors", mirrorId)
+
+	return err
+}
+
+type Open_vSwitch struct {
+	UUID           string   `json:"uuid"`
+	Bridges        []Bridge `json:"bridges"`
+	Version        string   `json:"ovs_version"`
+	System_Type    string   `json:"system_type"`
+	System_Version string   `json:"system_version"`
+}
+
+func (v *VSwitchService) Discovery() (string, error) {
+	output, err := v.exec("--format=list", "list", "Open_vSwitch")
+	ovs := new(Open_vSwitch)
+	if err != nil {
+		return "", err
+	}
+	var ovs_map map[string]interface{}
+	ovs_map = make(map[string]interface{})
+	ovs_map = ParseOutput(output)
+
+	ovs.UUID = ovs_map["_uuid"].(string)
+	ovs.Version = strings.Trim(ovs_map["ovs_version"].(string), "\"")
+	ovs.System_Type = ovs_map["system_type"].(string)
+	ovs.System_Version = strings.Trim(ovs_map["system_version"].(string), "\"")
+	ovs.Bridges = v.DiscoverBridge()
+
+	jsonstring, _ := json.Marshal(ovs)
+	return string(jsonstring), nil
+}
+
+type Bridge struct {
+	UUID    string   `json:"uuid"`
+	Name    string   `json:"name"`
+	Ports   []Port   `json:"ports"`
+	Mirrors []Mirror `json:"mirrors"`
+}
+
+// Discover Bridges
+func (v *VSwitchService) DiscoverBridge() []Bridge {
+	var bridges []Bridge
+	brs, _ := v.ListBridges()
+	for _, br := range brs {
+		bridge := new(Bridge)
+		uuid, _ := v.exec("get", "bridge", br, "_uuid")
+		bridge.UUID = string(uuid)
+		name, _ := v.exec("get", "bridge", br, "name")
+		bridge.Name = strings.Trim(string(name), "\"")
+		bridge.Ports = v.DiscoverPort(br)
+		bridge.Mirrors = v.DiscoverMirror(br)
+		bridges = append(bridges, *bridge)
+	}
+
+	return bridges
+}
+
+type Port struct {
+	UUID           string `json:"uuid"`
+	Name           string `json:"name"`
+	Ofport         int    `json:"ofport"`
+	Interface_Type string `json:"interface_type"`
+	Tag            *int   `json:"tag"`
+	Trunks         []int  `json:"trunks"`
+	MAC            string `json:"mac"`
+	Admin_State    string `json:"admin_state"`
+	Link_State     string `json:"link_state"`
+}
+
+// Discover Ports
+func (v *VSwitchService) DiscoverPort(bridgeId string) []Port {
+	var ports []Port
+	port_names, _ := v.ListPorts(bridgeId)
+	for _, port_name := range port_names {
+		port := new(Port)
+		uuid, _ := v.exec("get", "port", port_name, "_uuid")
+		port.UUID = string(uuid)
+		name, _ := v.exec("get", "port", port_name, "name")
+		port.Name = strings.Trim(string(name), "\"")
+		ofport, _ := v.exec("get", "interface", port_name, "ofport")
+		ofport_number, _ := strconv.Atoi(string(ofport))
+		port.Ofport = ofport_number
+		interface_type, _ := v.exec("get", "interface", port_name, "type")
+		port.Interface_Type = strings.Trim(string(interface_type), "\"")
+		tag, _ := v.exec("get", "port", port_name, "tag")
+		if string(tag) != "[]" {
+			tag_number, _ := strconv.Atoi(string(tag))
+			port.Tag = &tag_number
+		}
+		trunks, _ := v.exec("get", "port", port_name, "trunks")
+		if string(trunks) != "[]" {
+			var trunk_array []int
+			trunk_string := strings.Trim(string(trunks), "[]")
+			trunk_vlans := strings.Split(trunk_string, ", ")
+			for _, trunks_vlan := range trunk_vlans {
+				vlan_number, _ := strconv.Atoi(trunks_vlan)
+				trunk_array = append(trunk_array, vlan_number)
+			}
+			port.Trunks = trunk_array
+		}
+		mac, _ := v.exec("get", "interface", port_name, "mac_in_use")
+		port.MAC = strings.Trim(string(mac), "\"")
+		admin_state, _ := v.exec("get", "interface", port_name, "admin_state")
+		port.Admin_State = string(admin_state)
+		link_state, _ := v.exec("get", "interface", port_name, "link_state")
+		port.Link_State = string(link_state)
+
+		ports = append(ports, *port)
+	}
+
+	return ports
+}
+
+type Mirror struct {
+	UUID             string   `json:"uuid"`
+	Name             string   `json:"name"`
+	Select_All       string   `json:"select-all"`
+	Destination_Port []string `json:"select-dst-port"`
+	Source_Port      []string `json:"select-src-port"`
+	Output_Port      string   `json:"output-port"`
+}
+
+// Discover Mirrors
+func (v *VSwitchService) DiscoverMirror(bridgeId string) []Mirror {
+	var mirrors []Mirror
+	output, _ := v.exec("get", "bridge", bridgeId, "mirror")
+	mirrorID := strings.Trim(string(output), "[]")
+	if mirrorID != "" {
+		mirrorsID := strings.Split(mirrorID, ",")
+		for _, mirrorID := range mirrorsID {
+			mirror := new(Mirror)
+			output, err := v.exec("--format=list", "list", "Mirror", strings.TrimSpace(mirrorID))
+			if err == nil {
+				var mirror_map map[string]interface{}
+				mirror_map = make(map[string]interface{})
+				mirror_map = ParseOutput(output)
+				mirror.UUID = mirror_map["_uuid"].(string)
+				mirror.Name = strings.Trim(mirror_map["name"].(string), "\"")
+				mirror.Select_All = mirror_map["select_all"].(string)
+				mirror.Destination_Port = strings.Split(strings.Trim(mirror_map["select_dst_port"].(string), "[]"), ",")
+				mirror.Source_Port = strings.Split(strings.Trim(mirror_map["select_src_port"].(string), "[]"), ",")
+				mirror.Output_Port = mirror_map["output_port"].(string)
+
+				mirrors = append(mirrors, *mirror)
+			}
+		}
+	}
+	return mirrors
+}
+
+// Prase raw output into Map
+func ParseOutput(output []byte) map[string]interface{} {
+	var tableMap map[string]interface{}
+	tableMap = make(map[string]interface{})
+	row := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, data := range row {
+		content := strings.Split(strings.TrimSpace(data), ":")
+		tableMap[strings.TrimSpace(content[0])] = strings.TrimSpace(content[1])
+	}
+
+	return tableMap
 }
 
 // PortToBridge attempts to determine which bridge a port is attached to.

@@ -54,6 +54,24 @@ func (o *OpenFlowService) AddFlow(bridge string, flow *Flow) error {
 	return err
 }
 
+func (o *OpenFlowService) AddFlowString(bridge string, flowString string) error {
+	args := []string{"add-flow"}
+	args = append(args, o.c.ofctlFlags...)
+	args = append(args, []string{bridge, flowString}...)
+
+	_, err := o.exec(args...)
+	return err
+}
+
+func (o *OpenFlowService) DeleteFlowString(bridge string, flowString string) error {
+	args := []string{"del-flows"}
+	args = append(args, "--strict")
+	args = append(args, []string{bridge, flowString}...)
+
+	_, err := o.exec(args...)
+	return err
+}
+
 // A FlowTransaction is a transaction used when adding or deleting
 // multiple flows using an Open vSwitch flow bundle.
 type FlowTransaction struct {
